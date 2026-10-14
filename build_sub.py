@@ -1,11 +1,10 @@
-"""Build subscription.txt from your own configs (OWN_NODES secret), included as they are.
-- ws configs: one copy per ws address in the source list (only the address changes).
-- reality configs: one copy per reality endpoint in the source list. Address, port, flow and
-  fingerprint come from the source; pbk, sid, sni, UUID/password stay yours.
+"""Build subscription.txt from your ws configs (OWN_NODES secret), included as they are.
+Each ws config gets one copy per ws address in the source list; only the address changes.
+Reality configs are not included.
 """
 import base64, json, os, urllib.parse, urllib.request
 
-UA = {"User-Agent": "mine-sub/3.0"}
+UA = {"User-Agent": "mine-sub/4.0"}
 SOURCE = "https://raw.githubusercontent.com/papa8274/sub-mirror/main/subscription.txt"
 NAME = "mine"
 PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://")
@@ -52,57 +51,23 @@ def ws_addresses(lines):
     return sorted(addrs)
 
 
-def reality_endpoints(lines):
-    eps = []
-    for line in lines:
-        if line.startswith(("vless://", "trojan://")) and params(line).get("security") == "reality":
-            p = urllib.parse.urlsplit(line)
-            q = params(line)
-            eps.append({"host": p.hostname, "port": p.port, "flow": q.get("flow"), "fp": q.get("fp"), "type": q.get("type")})
-    return eps
+def is_my_ws(link):
+    return link.startswith(("vless://", "trojan://")) and params(link).get("type") == "ws"
 
 
-def kind(link):
-    if not link.startswith(("vless://", "trojan://")):
-        return None
-    q = params(link)
-    if q.get("security") == "reality":
-        return "reality"
-    if q.get("type") == "ws":
-        return "ws"
-    return None
-
-
-def set_params(query, updates):
-    pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
-    out, seen = [], set()
-    for k, v in pairs:
-        if k in updates:
-            seen.add(k)
-            if updates[k] is not None:
-                out.append((k, updates[k]))
-        else:
-            out.append((k, v))
-    for k, v in updates.items():
-        if k not in seen and v is not None:
-            out.append((k, v))
-    return urllib.parse.urlencode(out, quote_via=urllib.parse.quote)
-
-
-def with_endpoint(link, host, port, updates=None):
+def with_address(link, addr):
     p = urllib.parse.urlsplit(link)
     userinfo = p.netloc.rsplit("@", 1)[0]
-    h = f"[{host}]" if ":" in host else host
-    query = set_params(p.query, updates) if updates else p.query
-    return urllib.parse.urlunsplit((p.scheme, f"{userinfo}@{h}:{port}", p.path, query, ""))
+    port = p.port
+    a = f"[{addr}]" if ":" in addr else addr
+    return urllib.parse.urlunsplit((p.scheme, f"{userinfo}@{a}:{port}", p.path, p.query, ""))
 
 
 def main():
-    own = [l.strip() for l in os.environ.get("OWN_NODES", "").splitlines() if kind(l.strip())]
+    own = [l.strip() for l in os.environ.get("OWN_NODES", "").splitlines() if is_my_ws(l.strip())]
     src_lines = [l.strip() for l in decode_all(fetch(SOURCE)).splitlines() if l.strip()]
-    ws_addrs = ws_addresses(src_lines)
-    rel_eps = reality_endpoints(src_lines)
-    print("own:", len(own), "| ws addresses:", len(ws_addrs), "| reality endpoints:", len(rel_eps))
+    addrs = ws_addresses(src_lines)
+    print("own ws:", len(own), "| ws addresses:", len(addrs))
 
     bases, seen = [], set()
 
@@ -114,23 +79,8 @@ def main():
     for link in own:
         add(link.split("#", 1)[0])
     for link in own:
-        k = kind(link)
-        if k == "ws":
-            port = urllib.parse.urlsplit(link).port
-            for a in ws_addrs:
-                add(with_endpoint(link, a, port))
-        elif k == "reality":
-            is_vless = link.startswith("vless://")
-            own_type = params(link).get("type")
-            for ep in rel_eps:
-                if ep["type"] != own_type:
-                    continue
-                upd = {}
-                if ep["fp"]:
-                    upd["fp"] = ep["fp"]
-                if is_vless:
-                    upd["flow"] = ep["flow"]
-                add(with_endpoint(link, ep["host"], ep["port"], upd))
+        for a in addrs:
+            add(with_address(link, a))
 
     out = [f"{b}#{urllib.parse.quote(f'{NAME} {i}', safe='')}" for i, b in enumerate(bases, 1)]
     open("subscription.txt", "w", encoding="utf-8").write("\n".join(out) + "\n")
