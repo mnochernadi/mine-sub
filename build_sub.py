@@ -1,17 +1,21 @@
-"""Build subscription.txt from your ws configs (OWN_NODES secret), included as they are.
-Each ws config gets one copy per ws address in the source list; only the address changes.
-Reality configs are not included.
+"""Build subscription.txt for the ws-based scanning workflow.
+
+Every ws config in the source list (papa8274) is the template: its address, port, security
+(TLS or none), sni, host, path, fingerprint and other settings are copied as they are.
+Each of your own ws configs (OWN_NODES secret) supplies the credential (UUID or password).
+Result: for every source ws config, one copy per own credential. The whole list is rebuilt on
+every run and renamed mine N.
 """
 import base64, json, os, urllib.parse, urllib.request
 
-UA = {"User-Agent": "mine-sub/4.0"}
+UA = {"User-Agent": "mine-sub/5.0"}
 SOURCE = "https://raw.githubusercontent.com/papa8274/sub-mirror/main/subscription.txt"
 NAME = "mine"
 PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://")
 
 
 def fetch(url):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
         return r.read().decode("utf-8", errors="replace")
 
 
@@ -34,55 +38,49 @@ def params(link):
     return {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).items()}
 
 
-def ws_addresses(lines):
-    addrs = set()
-    for line in lines:
-        try:
-            if line.startswith("vmess://"):
-                d = json.loads(b64(line[8:]))
-                if d.get("net") == "ws" and d.get("add"):
-                    addrs.add(str(d["add"]))
-            elif line.startswith(("vless://", "trojan://")):
-                p = urllib.parse.urlsplit(line)
-                if params(line).get("type") == "ws" and p.hostname:
-                    addrs.add(p.hostname)
-        except Exception:
-            pass
-    return sorted(addrs)
-
-
-def is_my_ws(link):
+def is_ws(link):
     return link.startswith(("vless://", "trojan://")) and params(link).get("type") == "ws"
 
 
-def with_address(link, addr):
-    p = urllib.parse.urlsplit(link)
-    userinfo = p.netloc.rsplit("@", 1)[0]
-    port = p.port
-    a = f"[{addr}]" if ":" in addr else addr
-    return urllib.parse.urlunsplit((p.scheme, f"{userinfo}@{a}:{port}", p.path, p.query, ""))
+def credential(link):
+    """Return the user part (UUID for vless, password for trojan)."""
+    return urllib.parse.urlsplit(link).netloc.rsplit("@", 1)[0]
+
+
+def with_credential(template, cred):
+    p = urllib.parse.urlsplit(template)
+    host_port = p.netloc.rsplit("@", 1)[1]
+    return urllib.parse.urlunsplit((p.scheme, f"{cred}@{host_port}", p.path, p.query, ""))
 
 
 def main():
-    own = [l.strip() for l in os.environ.get("OWN_NODES", "").splitlines() if is_my_ws(l.strip())]
-    src_lines = [l.strip() for l in decode_all(fetch(SOURCE)).splitlines() if l.strip()]
-    addrs = ws_addresses(src_lines)
-    print("own ws:", len(own), "| ws addresses:", len(addrs))
+    own_creds = []
+    for l in os.environ.get("OWN_NODES", "").splitlines():
+        l = l.strip()
+        if is_ws(l):
+            c = credential(l)
+            if c and c not in own_creds:
+                own_creds.append(c)
+    templates = []
+    seen = set()
+    for l in decode_all(fetch(SOURCE)).splitlines():
+        l = l.strip()
+        if is_ws(l):
+            key = l.split("#", 1)[0]
+            if key not in seen:
+                seen.add(key)
+                templates.append(l.split("#", 1)[0])
+    print("own credentials:", len(own_creds), "| ws templates:", len(templates))
 
-    bases, seen = [], set()
+    out_bases, done = [], set()
+    for t in templates:
+        for c in own_creds:
+            link = with_credential(t, c)
+            if link not in done:
+                done.add(link)
+                out_bases.append(link)
 
-    def add(link):
-        if link not in seen:
-            seen.add(link)
-            bases.append(link)
-
-    for link in own:
-        add(link.split("#", 1)[0])
-    for link in own:
-        for a in addrs:
-            add(with_address(link, a))
-
-    out = [f"{b}#{urllib.parse.quote(f'{NAME} {i}', safe='')}" for i, b in enumerate(bases, 1)]
+    out = [f"{b}#{urllib.parse.quote(f'{NAME} {i}', safe='')}" for i, b in enumerate(out_bases, 1)]
     open("subscription.txt", "w", encoding="utf-8").write("\n".join(out) + "\n")
     print("written", len(out), "configs")
 
