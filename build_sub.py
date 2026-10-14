@@ -5,7 +5,7 @@ port, security/TLS, host, path, sni, fingerprint, UUID/password). Only the addre
 with each address found in the papa8274 source list (ws entries).
 Output: one config per (own config, address) pair, named mine N.
 """
-import base64, os, urllib.parse, urllib.request
+import base64, json, os, urllib.parse, urllib.request
 
 UA = {"User-Agent": "mine-sub/7.0"}
 SOURCE = "https://raw.githubusercontent.com/papa8274/sub-mirror/main/subscription.txt"
@@ -53,10 +53,16 @@ def source_addresses(text):
     addrs = []
     for line in decode_all(text).splitlines():
         line = line.strip()
-        if is_ws(line):
-            host = urllib.parse.urlsplit(line).hostname
+        if line.startswith(PROTOCOLS):
+            try:
+                if line.startswith("vmess://"):
+                    host = json.loads(b64(line[8:])).get("add")
+                else:
+                    host = urllib.parse.urlsplit(line).hostname
+            except Exception:
+                host = None
             if host and host not in addrs:
-                addrs.append(host)
+                addrs.append(str(host))
     return addrs
 
 
