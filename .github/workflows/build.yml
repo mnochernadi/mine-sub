@@ -1,27 +1,39 @@
 name: build-subscription
 on:
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [rebuild]
 permissions:
   contents: write
+concurrency:
+  group: build-subscription
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build subscription
+      - name: Rebuild every 20 minutes for about 5.5 hours
+        shell: bash
         env:
           OWN_NODES: ${{ secrets.OWN_NODES }}
-        run: python build_sub.py
-      - name: Commit output
         run: |
           git config user.name "sub-bot"
           git config user.email "sub-bot@users.noreply.github.com"
-          git add subscription.txt
-          git diff --cached --quiet || (git commit -m "update subscription" && git push)
+          end=$(( $(date +%s) + 5*3600 + 1800 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            python build_sub.py || echo "build failed, keeping previous file"
+            git add subscription.txt
+            if ! git diff --cached --quiet; then
+              git commit -qm "update subscription $(date -u +%H:%M)"
+              git pull --rebase -q
+              git push -q
+            fi
+            sleep 1200
+          done
