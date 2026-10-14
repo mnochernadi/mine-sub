@@ -58,7 +58,7 @@ def reality_endpoints(lines):
         if line.startswith(("vless://", "trojan://")) and params(line).get("security") == "reality":
             p = urllib.parse.urlsplit(line)
             q = params(line)
-            eps.append({"host": p.hostname, "port": p.port, "flow": q.get("flow"), "fp": q.get("fp")})
+            eps.append({"host": p.hostname, "port": p.port, "flow": q.get("flow"), "fp": q.get("fp"), "type": q.get("type")})
     return eps
 
 
@@ -121,7 +121,10 @@ def main():
                 add(with_endpoint(link, a, port))
         elif k == "reality":
             is_vless = link.startswith("vless://")
+            own_type = params(link).get("type")
             for ep in rel_eps:
+                if ep["type"] != own_type:
+                    continue
                 upd = {}
                 if ep["fp"]:
                     upd["fp"] = ep["fp"]
