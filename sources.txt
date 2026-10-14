@@ -1,0 +1,2 @@
+# Only the ws addresses from this list are used to adapt your ws configs.
+https://raw.githubusercontent.com/papa8274/sub-mirror/main/subscription.txt
