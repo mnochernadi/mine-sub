@@ -41,6 +41,14 @@ def is_ws(link):
     return link.startswith(("vless://", "trojan://")) and qtype(link) == "ws"
 
 
+def is_ws_tls(link):
+    return is_ws(link) and qparam(link, "security") == "tls"
+
+
+def qparam(link, key):
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(link).query, keep_blank_values=True)).get(key)
+
+
 def source_addresses(text):
     addrs = []
     for line in decode_all(text).splitlines():
@@ -64,7 +72,7 @@ def main():
     own = []
     for l in os.environ.get("OWN_NODES", "").splitlines():
         l = l.strip()
-        if is_ws(l):
+        if is_ws_tls(l):
             base = l.split("#", 1)[0]
             if base not in own:
                 own.append(base)
