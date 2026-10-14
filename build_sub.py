@@ -1,13 +1,16 @@
-"""Adapt your ws configs to the ws addresses of the source list.
-Your configs come from the OWN_NODES secret. For each of your ws configs, one copy is made per
-ws address in the source; only the address changes, UUID/host/sni/path stay yours.
-Output: subscription.txt (plain text), rebuilt every 20 minutes.
+"""Build subscription.txt from your own configs.
+Your configs come from the OWN_NODES secret and are included as they are. Then:
+- each ws config gets one copy per ws address in the source list (only the address changes);
+- each reality config gets one copy per reality endpoint in the source list (only host and port change).
+Keys (pbk, sid), UUID/password, sni, host and path stay yours.
+Note: reality only works on servers that hold your private key, so most reality copies will not connect.
 """
-import base64, json, os, urllib.parse, urllib.request
+import base64, json, os, re, urllib.parse, urllib.request
 
-UA = {"User-Agent": "mine-sub/1.0"}
+UA = {"User-Agent": "mine-sub/2.0"}
 SOURCE = "https://raw.githubusercontent.com/papa8274/sub-mirror/main/subscription.txt"
 NAME = "mine"
+PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://")
 
 
 def fetch(url):
@@ -22,7 +25,7 @@ def b64(s):
 
 def decode_all(text):
     s = "".join(text.split())
-    if s and not s.startswith(("vless://", "vmess://", "trojan://", "ss://")):
+    if s and not s.startswith(PROTOCOLS):
         try:
             return b64(s)
         except Exception:
@@ -48,28 +51,40 @@ def ws_addresses(text):
     return sorted(addrs)
 
 
-def is_my_ws(link):
+def reality_endpoints(text):
+    eps = set()
+    for line in decode_all(text).splitlines():
+        if "security=reality" in line:
+            m = re.search(r"@(\[[^\]]+\]|[^:/?#]+):(\d+)", line)
+            if m:
+                eps.add((m.group(1).strip("[]"), m.group(2)))
+    return sorted(eps)
+
+
+def kind(link):
     if not link.startswith(("vless://", "trojan://")):
-        return False
-    return urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).get("type", [""])[0] == "ws"
+        return None
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)
+    if q.get("security", [""])[0] == "reality":
+        return "reality"
+    if q.get("type", [""])[0] == "ws":
+        return "ws"
+    return None
 
 
-def with_address(link, addr):
+def with_endpoint(link, host, port):
     p = urllib.parse.urlsplit(link)
-    userinfo, hostport = p.netloc.rsplit("@", 1)
-    port = hostport.rsplit(":", 1)[1]
-    a = f"[{addr}]" if ":" in addr else addr
-    query = p.query
-    q = urllib.parse.parse_qs(query)
-    if q.get("security", [""])[0] == "tls" and "sni" not in q and p.hostname:
-        query += f"&sni={p.hostname}"
-    return urllib.parse.urlunsplit((p.scheme, f"{userinfo}@{a}:{port}", p.path, query, ""))
+    userinfo = p.netloc.rsplit("@", 1)[0]
+    h = f"[{host}]" if ":" in host else host
+    return urllib.parse.urlunsplit((p.scheme, f"{userinfo}@{h}:{port}", p.path, p.query, ""))
 
 
 def main():
-    own = [l.strip() for l in os.environ.get("OWN_NODES", "").splitlines() if is_my_ws(l.strip())]
-    addrs = ws_addresses(fetch(SOURCE))
-    print("own ws configs:", len(own), "| source ws addresses:", len(addrs))
+    own = [l.strip() for l in os.environ.get("OWN_NODES", "").splitlines() if kind(l.strip())]
+    text = fetch(SOURCE)
+    ws_addrs = ws_addresses(text)
+    rel_eps = reality_endpoints(text)
+    print("own configs:", len(own), "| ws addresses:", len(ws_addrs), "| reality endpoints:", len(rel_eps))
 
     bases, seen = [], set()
 
@@ -81,9 +96,17 @@ def main():
     for link in own:
         add(link.split("#", 1)[0])
     for link in own:
-        for addr in addrs:
+        k = kind(link)
+        port = urllib.parse.urlsplit(link).port
+        if k == "ws":
+            targets = [(a, port) for a in ws_addrs]
+        elif k == "reality":
+            targets = rel_eps
+        else:
+            targets = []
+        for host, p in targets:
             try:
-                add(with_address(link, addr))
+                add(with_endpoint(link, host, p))
             except Exception:
                 pass
 
