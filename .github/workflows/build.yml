@@ -32,8 +32,8 @@ jobs:
             git add subscription.txt
             if ! git diff --cached --quiet; then
               git commit -qm "update subscription $(date -u +%H:%M)"
-              git pull --rebase -q
-              git push -q
+              git pull --rebase -X theirs -q || { git rebase --abort 2>/dev/null; git reset -q --hard origin/main; python build_sub.py; git add subscription.txt; git commit -qm "rebuild subscription $(date -u +%H:%M)"; }
+              git push -q || echo "push failed, retry next round"
             fi
             sleep 1200
           done
