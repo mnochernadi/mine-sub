@@ -1,7 +1,7 @@
 name: build-subscription
 on:
   schedule:
-    - cron: "7 */6 * * *"
+    - cron: "*/20 * * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [rebuild]
@@ -13,27 +13,25 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Rebuild every 20 minutes for about 5.5 hours
-        shell: bash
+      - name: Build subscription
         env:
           OWN_NODES: ${{ secrets.OWN_NODES }}
+        run: python build_sub.py
+      - name: Commit and push
         run: |
           git config user.name "sub-bot"
           git config user.email "sub-bot@users.noreply.github.com"
-          end=$(( $(date +%s) + 5*3600 + 1800 ))
-          while [ "$(date +%s)" -lt "$end" ]; do
-            python build_sub.py || echo "build failed, keeping previous file"
-            git add subscription.txt
-            if ! git diff --cached --quiet; then
-              git commit -qm "update subscription $(date -u +%H:%M)"
-              git pull --rebase -X theirs -q || { git rebase --abort 2>/dev/null; git reset -q --hard origin/main; python build_sub.py; git add subscription.txt; git commit -qm "rebuild subscription $(date -u +%H:%M)"; }
-              git push -q || echo "push failed, retry next round"
-            fi
-            sleep 1200
+          git add subscription.txt
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -qm "update subscription $(date -u +%H:%M)"
+          for i in 1 2 3; do
+            if git pull --rebase -X theirs -q && git push -q; then exit 0; fi
+            sleep 5
           done
+          exit 1
